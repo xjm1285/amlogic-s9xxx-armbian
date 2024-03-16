@@ -49,7 +49,7 @@
 # Related file storage path
 current_path="${PWD}"
 armbian_outputpath="${current_path}/build/output/images"
-armbian_rebuild_file="${armbian_outputpath}/*-trunk_*.img"
+armbian_rebuild_file="${armbian_outputpath}/ubuntu-usb.img"
 build_path="${current_path}/build-armbian"
 kernel_path="${build_path}/kernel"
 uboot_path="${build_path}/u-boot"
@@ -90,22 +90,20 @@ rk3588_kernel=("5.10.y")
 rk35xx_kernel=("5.10.y")
 h6_kernel=("6.6.y")
 specific_6xy=("6.6.y" "6.1.y")
-specific_5xy=("5.15.y" "5.10.y" "5.4.y")
+specific_5xy=("5.4.y")
 specific_kernel=()
 # Set the list of kernels used by default(Selectable version)
-stable_kernel=("6.1.y" "5.15.y")
+stable_kernel=("5.4.272")
 flippy_kernel=(${stable_kernel[@]})
 dev_kernel=(${stable_kernel[@]})
 beta_kernel=(${stable_kernel[@]})
-# Set to automatically use the latest kernel
-auto_kernel="true"
 
 # Initialize the build device
 build_board="all"
 
 # Set Armbian size (Unit: MiB, boot_mb >= 256, root_mb >= 2048)
-boot_mb="512"
-root_mb="2560"
+boot_mb="256"
+root_mb="1280"
 # Set ROOTFS partition file system type, options: [ ext4 / btrfs ]
 rootfs_type="ext4"
 # Set Armbian OS type (server / desktop)
@@ -326,7 +324,7 @@ find_armbian() {
     # Find armbian version info: such as [ 22.02.0 ]
     armbian_rebuild_version="$(echo ${armbian_rebuild_name} | grep -oE '[2-9][0-9]\.[0-9]{1,2}\.[0-9]{1,2}' | head -n 1)"
     [[ -n "${armbian_rebuild_version}" ]] || {
-        armbian_rebuild_version="22.02.02"
+        armbian_rebuild_version="2024.02.01"
         echo -e "${WARNING} Missing armbian version info!"
     }
 
@@ -369,86 +367,6 @@ download_depends() {
     # Download Armbian firmware files
     git_pull_dir ${firmware_repo} main firmware ${firmware_path}
     [[ "${?}" -eq "0" ]] && echo -e "${INFO} firmware download completed." || error_msg "firmware download failed."
-}
-
-query_kernel() {
-    echo -e "${STEPS} Start querying the latest kernel version..."
-
-    # Check the version on the kernel repository
-    x="1"
-    for k in "${tags_list[@]}"; do
-        {
-            # Select the kernel list
-            kd="${k}"
-            case "${k}" in
-            stable) down_kernel_list=(${stable_kernel[@]}) ;;
-            flippy) down_kernel_list=(${flippy_kernel[@]}) ;;
-            dev) down_kernel_list=(${dev_kernel[@]}) ;;
-            beta) down_kernel_list=(${beta_kernel[@]}) ;;
-            rk3588) down_kernel_list=(${rk3588_kernel[@]}) ;;
-            rk35xx) down_kernel_list=(${rk35xx_kernel[@]}) ;;
-            h6) down_kernel_list=(${h6_kernel[@]}) ;;
-            5.x.y)
-                down_kernel_list=(${specific_5xy[@]})
-                kd="${specific_tags}"
-                ;;
-            6.x.y)
-                down_kernel_list=(${specific_6xy[@]})
-                kd="${specific_tags}"
-                ;;
-            specific)
-                down_kernel_list=(${specific_kernel[@]})
-                kd="${specific_tags}"
-                ;;
-            *) error_msg "Invalid tags." ;;
-            esac
-
-            # Query the name of the latest kernel version
-            tmp_arr_kernels=()
-            i=1
-            for kernel_var in "${down_kernel_list[@]}"; do
-                echo -e "${INFO} (${x}.${i}) Auto query the latest kernel version for [ ${k} - ${kernel_var} ]"
-
-                # Identify the kernel <VERSION> and <PATCHLEVEL>, such as [ 6.1 ]
-                kernel_verpatch="$(echo ${kernel_var} | awk -F '.' '{print $1"."$2}')"
-
-                # Query the latest kernel version
-                latest_version="$(
-                    curl -fsSL \
-                        ${kernel_api}/releases/expanded_assets/kernel_${kd} |
-                        grep -oE "${kernel_verpatch}.[0-9]+.tar.gz" | sed 's/.tar.gz//' |
-                        sort -urV | head -n 1
-                )"
-
-                if [[ "${?}" -eq "0" && -n "${latest_version}" ]]; then
-                    tmp_arr_kernels[${i}]="${latest_version}"
-                else
-                    tmp_arr_kernels[${i}]="${kernel_var}"
-                fi
-
-                echo -e "${INFO} (${x}.${i}) [ ${k} - ${tmp_arr_kernels[$i]} ] is latest kernel. \n"
-
-                let i++
-            done
-
-            # Reset the kernel array to the latest kernel version
-            case "${k}" in
-            stable) stable_kernel=(${tmp_arr_kernels[@]}) ;;
-            flippy) flippy_kernel=(${tmp_arr_kernels[@]}) ;;
-            dev) dev_kernel=(${tmp_arr_kernels[@]}) ;;
-            beta) beta_kernel=(${tmp_arr_kernels[@]}) ;;
-            rk3588) rk3588_kernel=(${tmp_arr_kernels[@]}) ;;
-            rk35xx) rk35xx_kernel=(${tmp_arr_kernels[@]}) ;;
-            h6) h6_kernel=(${tmp_arr_kernels[@]}) ;;
-            5.x.y) specific_5xy=(${tmp_arr_kernels[@]}) ;;
-            6.x.y) specific_6xy=(${tmp_arr_kernels[@]}) ;;
-            specific) specific_kernel=(${tmp_arr_kernels[@]}) ;;
-            *) error_msg "Invalid tags." ;;
-            esac
-
-            let x++
-        }
-    done
 }
 
 check_kernel() {
@@ -503,7 +421,8 @@ download_kernel() {
             i="1"
             for kernel_var in "${down_kernel_list[@]}"; do
                 if [[ ! -d "${kernel_path}/${kd}/${kernel_var}" ]]; then
-                    kernel_down_from="https://github.com/${kernel_repo}/releases/download/kernel_${kd}/${kernel_var}.tar.gz"
+#                    kernel_down_from="https://github.com/${kernel_repo}/releases/download/kernel_${kd}/${kernel_var}.tar.gz"
+                    kernel_down_from="https://node.histb.com:9088/update/system/s905/${kernel_var}.tar.gz"
                     echo -e "${INFO} (${x}.${i}) [ ${k} - ${kernel_var} ] Kernel download from [ ${kernel_down_from} ]"
 
                     [[ -d "${kernel_path}/${kd}" ]] || mkdir -p ${kernel_path}/${kd}
@@ -587,7 +506,7 @@ extract_armbian() {
     loop_old="$(losetup -P -f --show "${armbian_image_file}")"
     [[ -n "${loop_old}" ]] || error_msg "losetup ${armbian_image_file} failed."
 
-    mount_try ext4 ${loop_old}p1 ${tmp_armbian}
+    mount_try ext4 ${loop_old}p2 ${tmp_armbian}
 
     cd ${tmp_armbian}
 
@@ -744,7 +663,7 @@ copy_files() {
     cp -af ${tmp_armbian}/* ${tag_rootfs}
 
     # Copy the common files
-    [[ -d "${common_files}" ]] && cp -af --no-preserve=ownership ${common_files}/* ${tag_rootfs}
+#    [[ -d "${common_files}" ]] && cp -af --no-preserve=ownership ${common_files}/* ${tag_rootfs}
 
     # Copy the platform files
     platform_bootfs="${platform_files}/${PLATFORM}/bootfs"
@@ -1047,7 +966,7 @@ refactor_rootfs() {
         # x96max plus v5.1 (ip1001m phy) adopts am7256 (brcm4354)
         sed -e "s/macaddr=.*/macaddr=${random_macaddr}:07/" "brcmfmac4354-sdio.txt" >"brcmfmac4354-sdio.amlogic,sm1.txt"
         # ct2000 s922x is brm4359
-        sed -i "s/macaddr=.*/macaddr=${random_macaddr}:08/" "brcmfmac4359-sdio.ali,ct2000.txt"
+#        sed -i "s/macaddr=.*/macaddr=${random_macaddr}:08/" "brcmfmac4359-sdio.ali,ct2000.txt"
     )
 
     # Add custom Armbian information
@@ -1089,7 +1008,7 @@ clean_tmp() {
     process_msg "(7/7) Clear temporary files."
     cd ${current_path}
 
-    umount -f ${tmp_armbian} 2>/dev/null
+    umount -l -f ${tmp_armbian} 2>/dev/null
     losetup -d ${loop_old} 2>/dev/null
 
     fstrim ${tag_bootfs} 2>/dev/null
@@ -1200,8 +1119,6 @@ check_data
 find_armbian
 # Download the dependency files
 download_depends
-# Query the latest kernel version
-[[ "${auto_kernel}" == "true" ]] && query_kernel
 # Download the kernel files
 download_kernel
 

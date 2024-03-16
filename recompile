@@ -49,10 +49,10 @@ config_path="${compile_path}/tools/config"
 script_path="${compile_path}/tools/script"
 kernel_patch_path="${compile_path}/tools/patch"
 armbian_path="${compile_path}/tools/armbian"
-armbian_file="${armbian_path}/armbian.img"
+armbian_file="${armbian_path}/ubuntu.img"
 output_path="${compile_path}/output"
 chroot_path="${output_path}/chroot"
-chroot_file="${chroot_path}/chroot_armbian.img"
+chroot_file="${chroot_path}/chroot_ubuntu.img"
 [[ -d "${kernel_path}" ]] || mkdir -p ${kernel_path}
 [[ -d "${output_path}" ]] || mkdir -p ${output_path}
 
@@ -63,25 +63,29 @@ host_release="$(cat /etc/os-release | grep '^VERSION_CODENAME=.*' | cut -d'=' -f
 # Set the default for downloading kernel sources from github.com
 repo_owner="unifreq"
 repo_branch="main"
-build_kernel=("6.1.y" "5.15.y")
+build_kernel=("5.4.272")
 # Set whether to use the latest kernel, options: [ true / false ]
-auto_kernel="true"
+auto_kernel="false"
 # Set whether to apply custom kernel patches, options: [ true / false ]
 auto_patch="false"
 # Set custom signature for the kernel
-custom_name="-ophub"
+custom_name="-hinas"
 # Set the kernel compile object, options: [ dtbs / all ]
 package_list="all"
 # Set the compression format, options: [ gzip / lzma / xz / zstd ]
 compress_format="xz"
 
+BOOT_MB="256"
+ROOT_MB="1280"
+ARMBIAN_PLATFORM="amlogic"
+
 # Cross compile toolchain download mirror
-dev_repo="https://github.com/ophub/kernel/releases/download/dev"
+dev_repo="https://node.histb.com:9088/update/soft_init/amlproject"
 # Arm GNU Toolchain source: https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads
 gun_file_x86_64="arm-gnu-toolchain-13.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz"
 gun_file_aarch64="arm-gnu-toolchain-13.2.rel1-aarch64-aarch64-none-elf.tar.xz"
 # Armenian file source: https://github.com/ophub/amlogic-s9xxx-armbian/releases
-armbian_rootfs_file="armbian.tar.xz"
+armbian_rootfs_file="s905d-backup-64.gz"
 # Set the toolchain path
 toolchain_path="/usr/local/toolchain"
 # Set the default cross-compilation toolchain: [ gcc / clang ]
@@ -203,6 +207,10 @@ init_var() {
                 error_msg "Invalid -c parameter [ ${2} ]!"
             fi
             ;;
+        -b | --board)
+			ARMBIAN_PLATFORM="${1}"
+			shift
+            ;;
         *)
             error_msg "Invalid option [ ${1} ]!"
             ;;
@@ -227,23 +235,22 @@ toolchain_check() {
     # Install dependencies for jammy
     sudo apt-get -qq update
     if [[ "${arch_info}" == "x86_64" ]]; then
-        sudo apt-get -qq install -y $(cat compile-kernel/tools/script/ubuntu2204-build-armbian-depends)
+        sudo apt-get -qq install -y $(cat compile-kernel/tools/script/ubuntu2004-build-armbian-depends)
     else
         sudo apt-get -qq install -y $(cat compile-kernel/tools/script/armbian-compile-kernel-depends)
     fi
 
-    # Download armbian
+    # Download ubuntu
     if [[ ! -f "${armbian_file}" ]]; then
-        echo -e "${INFO} Start downloading Armbian rootfs file [ ${armbian_rootfs_file} ]..."
+        echo -e "${INFO} Start downloading HiNas rootfs file [ ${armbian_rootfs_file} ]..."
         rm -rf ${armbian_path} && mkdir -p ${armbian_path}
-        curl -fsSL "${dev_repo}/${armbian_rootfs_file}" -o "${armbian_path}/${armbian_rootfs_file}"
-        [[ "${?}" -eq "0" ]] || error_msg "Armbian file download failed"
-        tar -xJf ${armbian_path}/${armbian_rootfs_file} -C ${armbian_path}
-        # Change other names to armbian.img
-        [[ -f "${armbian_file}" ]] || mv -f ${armbian_path}/*.img ${armbian_file}
+        curl -fsSL "https://node.histb.com:9088/update/system/s905/${armbian_rootfs_file}" -o "${armbian_path}/${armbian_rootfs_file}"
+        [[ "${?}" -eq "0" ]] || error_msg "HiNas file download failed"
+        gunzip -c ${armbian_path}/${armbian_rootfs_file} > ${armbian_file}
+        
         # Delete download file
         rm -f ${armbian_path}/${armbian_rootfs_file}
-        [[ -f "${armbian_file}" ]] || error_msg "There is no Armbian rootfs file: [ ${armbian_file} ]"
+        [[ -f "${armbian_file}" ]] || error_msg "There is no HiNas rootfs file: [ ${armbian_file} ]"
     fi
 
     # Set the default path
@@ -472,7 +479,7 @@ compile_env() {
     MAKE_SET_STRING=" ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} CC=${CC} LD=${LD} ${MFLAGS} LOCALVERSION=${LOCALVERSION} "
 
     # Make clean/mrproper
-    make ${MAKE_SET_STRING} mrproper
+#    make ${MAKE_SET_STRING} mrproper
 
     # Check .config file
     if [[ ! -s ".config" ]]; then
@@ -541,18 +548,38 @@ generate_uinitrd() {
     cd ${current_path}
     echo -e "${STEPS} Create chroot..."
 
-    cp -f ${armbian_file} ${chroot_file}
-
-    # Mount the armbian system
-    tag_rootfs="${chroot_path}/root"
+	IMG_SIZE="$((BOOT_MB + ROOT_MB + 1))"
+	truncate -s ${IMG_SIZE}M ${chroot_file} >/dev/null 2>&1
+	parted -s ${chroot_file} mklabel msdos 2>/dev/null
+	parted -s ${chroot_file} mkpart primary fat32 1MiB $((BOOT_MB + 1))MiB 2>/dev/null
+	parted -s ${chroot_file} mkpart primary ext4 $((BOOT_MB + 1))MiB 100% 2>/dev/null
 
     loop_armbian="$(losetup -P -f --show "${chroot_file}")"
     [[ -n "${loop_armbian}" ]] || error_msg "losetup ${chroot_file} failed."
 
+	ROOTFS_UUID="$(cat /proc/sys/kernel/random/uuid)"
+	mkfs.vfat -F 32 -n "BOOT" ${loop_armbian}p1 >/dev/null 2>&1
+	mkfs.ext4 -F -q -U ${ROOTFS_UUID} -L "ROOTFS" -b 4k -m 0 ${loop_armbian}p2 >/dev/null 2>&1
+
+#    cp -f ${armbian_file} ${chroot_file}
+
+    # Mount the armbian system
+    tag_rootfs="${chroot_path}/root"
+
     mount_try ${loop_armbian}p2 ${tag_rootfs}
+    mkdir -p ${tag_rootfs}/boot
     mount_try ${loop_armbian}p1 ${tag_rootfs}/boot
 
-    ARMBIAN_PLATFORM="$(cat ${tag_rootfs}/etc/ophub-release 2>/dev/null | grep -E "^PLATFORM=.*" | cut -d"'" -f2)"
+    loop_source="$(losetup -P -f --show "${armbian_file}")"
+    [[ -n "${loop_source}" ]] || error_msg "losetup ${armbian_file} failed."
+    
+    tmp_dir=$(mktemp -d)
+    mount_try ${loop_source} ${tmp_dir}
+    
+	cp -a ${tmp_dir}/* ${tag_rootfs}
+	umount -f ${tmp_dir} && rm -rf ${tmp_dir} && losetup -d ${loop_source}
+
+#    ARMBIAN_PLATFORM="$(cat ${tag_rootfs}/etc/ophub-release 2>/dev/null | grep -E "^PLATFORM=.*" | cut -d"'" -f2)"
     echo -e "${INFO} Armbian PLATFORM: [ ${ARMBIAN_PLATFORM} ]"
 
     # Remove current system files for /boot
@@ -572,17 +599,6 @@ generate_uinitrd() {
     cp -rf ${output_path}/modules/lib/modules/${kernel_outname} -t ${tag_rootfs}/usr/lib/modules
     #echo -e "${INFO} Kernel copy results in the [ ${tag_rootfs}/usr/lib/modules ] directory: \n$(ls -l ${tag_rootfs}/usr/lib/modules) \n"
 
-    # COMPRESS: [ gzip | lzma | xz | zstd ]
-    [[ "${kernel_outname}" =~ ^5.4.[0-9]+ ]] && compress_format="xz"
-    compress_initrd_file="${tag_rootfs}/etc/initramfs-tools/initramfs.conf"
-    if [[ -f "${compress_initrd_file}" ]]; then
-        sed -i "s|^COMPRESS=.*|COMPRESS=${compress_format}|g" ${compress_initrd_file}
-        compress_settings="$(cat ${compress_initrd_file} | grep -E ^COMPRESS=)"
-        echo -e "${INFO} Set the [ ${compress_settings} ] in the initramfs.conf file."
-    else
-        error_msg "The [ ${compress_initrd_file} ] file does not exist."
-    fi
-
     [[ -f "/usr/bin/${qemu_binary_arm64}" ]] && cp -f /usr/bin/${qemu_binary_arm64} ${tag_rootfs}/usr/bin/
     #echo -e "${INFO} The [ ${qemu_binary_arm64} ] file copy results: \n$(ls -l ${tag_rootfs}/usr/bin/${qemu_binary_arm64}) \n"
 
@@ -598,10 +614,22 @@ generate_uinitrd() {
     sudo mount --bind /dev/pts ${tag_rootfs}/dev/pts
     sudo mount --bind /proc/$$/fd ${tag_rootfs}/dev/fd
     sudo chmod 0666 ${tag_rootfs}/dev/null
+
+    chroot ${tag_rootfs} /bin/bash -c "apt-get update;apt-get install -y initramfs-tools;apt-get clean -y;rm -rf /var/cache/debconf/* /var/lib/apt/lists/* /var/log/* /var/tmp/*"
+    cd ${current_path}
+    
+    wget https://node.histb.com:9088/update/system/s905/uInitrd -O ${tag_rootfs}/boot/uInitrd
+
+    # COMPRESS: [ gzip | lzma | xz | zstd ]
+    [[ "${kernel_outname}" =~ ^5.4.[0-9]+ ]] && compress_format="xz"
+    compress_initrd_file="${tag_rootfs}/etc/initramfs-tools/initramfs.conf"
+	sed -i "s|^COMPRESS=.*|COMPRESS=${compress_format}|g" ${compress_initrd_file}
+	compress_settings="$(cat ${compress_initrd_file} | grep -E ^COMPRESS=)"
+	echo -e "${INFO} Set the [ ${compress_settings} ] in the initramfs.conf file."
+
     chroot ${tag_rootfs} /bin/bash -c "/root/ubuntu_chroot_armbian.sh ${kernel_outname}"
     [[ "${?}" -eq "0" && -f "${tag_rootfs}/boot/uInitrd-${kernel_outname}" ]] || error_msg "Create chroot uInitrd-${kernel_outname} file failed."
 
-    cd ${current_path}
     # Copy the generated uInitrd file to the current system
     echo -e "${INFO} Copy the generated files from [ ${tag_rootfs}/boot ]"
     cp -rf ${tag_rootfs}/boot/*${kernel_outname} ${output_path}/boot
@@ -615,6 +643,9 @@ generate_uinitrd() {
     sudo umount ${tag_rootfs}/boot 2>/dev/null
     sudo umount ${tag_rootfs} 2>/dev/null
     losetup -D 2>/dev/null
+    
+    mkdir -p ${current_path}/build/output/images
+    mv ${chroot_file} ${current_path}/build/output/images/ubuntu-usb.img
 }
 
 packit_dtbs() {
